@@ -1,67 +1,101 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import pickle
+import os
 
-# File paths
-RATINGS_CSV = "ratings.csv"
-MOVIES_CSV = "movies.csv"  # Optional: comment this line if you don't have movies.csv
+st.title("Dual Movie Recommender System")
 
-# Load the ratings data
+# ---- Load DataFrames ----
+MOVIELENS_DIR = "ml-latest-small"
+MOVIES_CSV = os.path.join(MOVIELENS_DIR, "movies.csv")
+RATINGS_CSV = os.path.join(MOVIELENS_DIR, "ratings.csv")
+
 @st.cache_data
-def load_ratings():
-    return pd.read_csv(RATINGS_CSV)
-
-# Optional: Load the movies data
-@st.cache_data
-def load_movies():
-    try:
-        return pd.read_csv(MOVIES_CSV)
-    except FileNotFoundError:
+def load_csv(path):
+    if not os.path.exists(path):
         return None
+    return pd.read_csv(path)
 
-def main():
-    st.title("Movie Recommender System")
+movies = load_csv(MOVIES_CSV)
+ratings = load_csv(RATINGS_CSV)
 
-    ratings = load_ratings()
-    movies = load_movies()
+if movies is None or ratings is None:
+    st.error(
+        f"Could not find required CSV files. Make sure both `{MOVIES_CSV}` and `{RATINGS_CSV}` exist in your repository."
+    )
+    st.stop()
 
-    st.header("Dataset Preview")
-    st.subheader("Ratings")
-    st.write(ratings.head())
-    if movies is not None:
-        st.subheader("Movies")
-        st.write(movies.head())
+# ---- Load Model Artifacts ----
+def load_pickle(path):
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+content_data = load_pickle("content_model.pkl")
+cf_data = load_pickle("cf_model.pkl")
+
+if content_data is None or cf_data is None:
+    st.error(
+        "Required model files `content_model.pkl` and/or `cf_model.pkl` are missing. "
+        "Please upload them to the root of your repository."
+    )
+    st.stop()
+
+tfidf = content_data['tfidf']
+cosine_sim = content_data['cosine_sim']
+movies_content = content_data['movies']
+
+predicted_ratings_df = cf_data['predicted_ratings_df']
+movies_cf = cf_data['movies']
+
+# ------------------ Content-Based Section ------------------
+st.header("Section 1: Content-Based Recommendations")
+
+movie_titles = movies_content['title'].drop_duplicates().sort_values().tolist()
+selected_movie = st.selectbox("Select a movie for content-based recommendations:", movie_titles)
+
+if selected_movie:
+    indices = pd.Series(movies_content.index, index=movies_content['title']).drop_duplicates()
+    idx = indices[selected_movie]
+    sim_scores = list(enumerate(cosine_sim[idx]))
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+    sim_scores = sim_scores[1:6]  # Skip itself, get top 5
+    movie_indices = [i[0] for i in sim_scores]
+    recommended = movies_content['title'].iloc[movie_indices].values
+
+    st.subheader("Top 5 movies similar to:")
+    st.write(f"**{selected_movie}**")
+    for i, title in enumerate(recommended, 1):
+        st.write(f"{i}. {title}")
+
+# ------------------ Collaborative Filtering Section ------------------
+st.header("Section 2: Collaborative Filtering Recommendations")
+
+min_user = int(predicted_ratings_df.index.min())
+max_user = int(predicted_ratings_df.index.max())
+user_id = st.number_input(
+    f"Enter a User ID (between {min_user} and {max_user}):",
+    min_value=min_user,
+    max_value=max_user,
+    step=1
+)
+
+if user_id:
+    user_id = int(user_id)
+    if user_id in predicted_ratings_df.index:
+        user_row = predicted_ratings_df.loc[user_id]
+        rated_movies = set(ratings[ratings['userId'] == user_id]['movieId'])
+        recs = user_row.drop(labels=rated_movies, errors='ignore').sort_values(ascending=False).head(5)
+        recommended_movie_ids = recs.index
+        recommended_titles = movies_cf[movies_cf['movieId'].isin(recommended_movie_ids)]['title'].values
+
+        st.subheader(f"Top 5 movie recommendations for User {user_id}:")
+        for i, title in enumerate(recommended_titles, 1):
+            st.write(f"{i}. {title}")
     else:
-        st.info("movies.csv not found. Showing only ratings-based recommendations.")
+        st.warning("User ID not found in the ratings data. Please try another ID.")
 
-    st.header("Get Top Rated Movies")
-
-    # Recommend top movies by average rating (with at least 10 ratings)
-    if movies is not None:
-        merged = pd.merge(ratings, movies, on='movieId')
-        movie_stats = merged.groupby('title').agg({'rating': ['mean', 'count']})
-        movie_stats.columns = ['average_rating', 'rating_count']
-        filtered = movie_stats[movie_stats['rating_count'] >= 10]
-        top_n = st.slider("How many recommendations?", 5, 30, 10)
-        st.write(filtered.sort_values('average_rating', ascending=False).head(top_n))
-    else:
-        # If only ratings.csv is available
-        movie_stats = ratings.groupby('movieId').agg({'rating': ['mean', 'count']})
-        movie_stats.columns = ['average_rating', 'rating_count']
-        filtered = movie_stats[movie_stats['rating_count'] >= 10]
-        top_n = st.slider("How many recommendations?", 5, 30, 10)
-        st.write(filtered.sort_values('average_rating', ascending=False).head(top_n))
-
-    st.header("Find Movies by User")
-    user_ids = ratings['userId'].unique()
-    user_id = st.selectbox("Select userId", user_ids)
-    user_ratings = ratings[ratings['userId'] == user_id]
-    st.write("Movies rated by user:")
-    if movies is not None:
-        user_movies = pd.merge(user_ratings, movies, on='movieId')
-        st.write(user_movies[['title', 'rating']])
-    else:
-        st.write(user_ratings[['movieId', 'rating']])
-
-if __name__ == '__main__':
-    main()
+st.markdown("---")
+st.caption("Content-based: TF-IDF on genres; Collaborative Filtering: Matrix factorization (SVD)")
