@@ -4,34 +4,53 @@ import numpy as np
 import pickle
 import os
 
-import streamlit as st
+st.title("Dual Movie Recommender System")
 
-st.title("Movie Recommender System")
-st.write("Hello, Streamlit is working!")
+# ---- Helper: Try multiple possible file locations ----
+def find_file(filename, search_dirs=[".", "ml-latest-small"]):
+    for d in search_dirs:
+        candidate = os.path.join(d, filename)
+        if os.path.exists(candidate):
+            return candidate
+    return None
 
-# ---- Load DataFrames ----
-# Adjust the path if your files are in a subdirectory
-MOVIELENS_DIR = "ml-latest-small"
-MOVIES_CSV = os.path.join(MOVIELENS_DIR, "movies.csv")
-RATINGS_CSV = os.path.join(MOVIELENS_DIR, "ratings.csv")
+# ---- Load files with fallback ----
+MOVIES_CSV = find_file("movies.csv")
+RATINGS_CSV = find_file("ratings.csv")
+CONTENT_MODEL = find_file("content_model.pkl")
+CF_MODEL = find_file("cf_model.pkl")
 
-# Load ratings and movies DataFrames
-ratings = pd.read_csv(RATINGS_CSV)
-movies = pd.read_csv(MOVIES_CSV)
+if not MOVIES_CSV or not RATINGS_CSV:
+    st.error(
+        "Cannot find movies.csv and/or ratings.csv. Please upload these files to the root or 'ml-latest-small' folder of your repository."
+    )
+    st.stop()
+if not CONTENT_MODEL or not CF_MODEL:
+    st.error(
+        "Cannot find content_model.pkl and/or cf_model.pkl. Please upload these model files to the root or 'ml-latest-small' folder of your repository."
+    )
+    st.stop()
 
-# ---- Load Model Artifacts ----
-with open("content_model.pkl", "rb") as f:
-    content_data = pickle.load(f)
+@st.cache_data
+def load_csv(path):
+    return pd.read_csv(path)
+
+@st.cache_data
+def load_pickle(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+movies = load_csv(MOVIES_CSV)
+ratings = load_csv(RATINGS_CSV)
+content_data = load_pickle(CONTENT_MODEL)
+cf_data = load_pickle(CF_MODEL)
+
 tfidf = content_data['tfidf']
 cosine_sim = content_data['cosine_sim']
 movies_content = content_data['movies']
 
-with open("cf_model.pkl", "rb") as f:
-    cf_data = pickle.load(f)
 predicted_ratings_df = cf_data['predicted_ratings_df']
 movies_cf = cf_data['movies']
-
-st.title("Dual Movie Recommender System")
 
 # ------------------ Content-Based Section ------------------
 st.header("Section 1: Content-Based Recommendations")
@@ -58,16 +77,19 @@ st.header("Section 2: Collaborative Filtering Recommendations")
 
 min_user = int(predicted_ratings_df.index.min())
 max_user = int(predicted_ratings_df.index.max())
-user_id = st.number_input(f"Enter a User ID (between {min_user} and {max_user}):", min_value=min_user, max_value=max_user, step=1)
+user_id = st.number_input(
+    f"Enter a User ID (between {min_user} and {max_user}):",
+    min_value=min_user,
+    max_value=max_user,
+    step=1
+)
 
 if user_id:
     user_id = int(user_id)
     if user_id in predicted_ratings_df.index:
         user_row = predicted_ratings_df.loc[user_id]
-        # Movies already rated by user
         rated_movies = set(ratings[ratings['userId'] == user_id]['movieId'])
-        # Recommend movies not yet rated
-        recs = user_row.drop(labels=rated_movies).sort_values(ascending=False).head(5)
+        recs = user_row.drop(labels=rated_movies, errors='ignore').sort_values(ascending=False).head(5)
         recommended_movie_ids = recs.index
         recommended_titles = movies_cf[movies_cf['movieId'].isin(recommended_movie_ids)]['title'].values
 
