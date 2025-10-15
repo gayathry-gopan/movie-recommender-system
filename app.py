@@ -4,6 +4,11 @@ import numpy as np
 import pickle
 import os
 
+import streamlit as st
+
+st.title("Movie Recommender System")
+st.write("Hello, Streamlit is working!")
+
 # ---- Load DataFrames ----
 # Adjust the path if your files are in a subdirectory
 MOVIELENS_DIR = "ml-latest-small"
@@ -73,4 +78,5 @@ if user_id:
         st.warning("User ID not found in the ratings data. Please try another ID.")
 
 st.markdown("---")
+
 st.caption("Content-based: TF-IDF on genres; Collaborative Filtering: Matrix factorization (SVD)")
